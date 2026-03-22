@@ -143,6 +143,10 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+audio_env/
+
+# Test recordings
+test_capture*.wav
 
 # Spyder project settings
 .spyderproject

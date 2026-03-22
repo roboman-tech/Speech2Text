@@ -1,0 +1,9 @@
+# Live Caption - Windows-style (system audio + mic)
+# PyAudioWPatch: WASAPI loopback for system audio + mic (Windows). Replaces PyAudio.
+# On non-Windows or if PyAudioWPatch fails: uses PyAudio for mic-only.
+PyAudioWPatch>=0.2.12.8
+PyAudio>=0.2.14
+numpy>=1.24.0
+noisereduce>=3.0.0
+scipy>=1.10.0
+openai-whisper>=20231117
