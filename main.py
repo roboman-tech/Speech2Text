@@ -229,7 +229,8 @@ def main():
     transcriber = RealtimeTranscriber(
         audio_queue,
         text_callback=lambda t, **kw: on_transcription(t, **kw),
-        whisper_model_size="small.en",  # English-only; use "turbo" for multilingual
+        #whisper_model_size="small.en",  # English-only; use "turbo" for multilingual
+        whisper_model_size="turbo",  # English-only; use "turbo" for multilingual
         use_noise_reduce=True,
         verbose=args.verbose,
         use_diarization=use_diarize,
