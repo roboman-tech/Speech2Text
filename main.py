@@ -363,7 +363,7 @@ def main():
         Uses pre-given context (resume, etc.) and dialogue since last Clear."""
         sys = (
             "You are an interview answering assistant. Use the pre-given context (resume, job description, etc.) "
-            "and the dialogue history (transcriptions since last clear) to generate clear, relevant answers. Be concise but complete."
+            "and the dialogue history (transcriptions since last clear) to generate clear, relevant, conversational answers. Be concise but complete."
         )
         lines = []
         for h in dialogue_since_clear:
@@ -376,7 +376,7 @@ def main():
         if question:
             user += f"Latest question/request:\n{question}\n\nGenerate a helpful answer:"
         else:
-            user += "Based on the dialogue above, provide a brief summary or suggested response."
+            user += "Based on the dialogue above, provide a only answer for latest question or request."
         return sys, user
 
     def generate_answer():
