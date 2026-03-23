@@ -1,44 +1,64 @@
 """
-Interview Answering Assistant UI.
+NPC Dialogue Engine UI.
 Panels: Live Caption/Dialogue History, User Context, Generated Answer.
 """
 
 import tkinter as tk
 from tkinter import font as tkfont
 
-# Style constants
-BG = "#1a1a1a"
-FG = "#ffffff"
-ACCENT = "#4a9eff"
+# Style constants — warm dark theme
+BG = "#0f0f12"
+BG_PANEL = "#18181c"
+BG_INPUT = "#1e1e24"
+FG = "#e8e8ed"
+FG_DIM = "#8888a0"
+ACCENT = "#3b82f6"
+ACCENT_HOVER = "#60a5fa"
+SUCCESS = "#22c55e"
+LIVE = "#ef4444"
+BORDER = "#2a2a32"
+RADIUS = 2
 
 
-def _make_label(parent, text: str, bg=BG, fg="#aaa"):
+def _make_label(parent, text: str, bg=BG, fg=FG_DIM, size=9):
     """Create a panel section label."""
-    return tk.Label(parent, text=text, font=("Segoe UI", 9), fg=fg, bg=bg)
+    return tk.Label(parent, text=text, font=("Segoe UI", size), fg=fg, bg=bg)
+
+
+def _make_panel(parent, title: str, icon: str = "") -> tuple:
+    """Create a framed panel with header. Returns (content_frame, inner_widget_frame)."""
+    frame = tk.Frame(parent, bg=BG_PANEL, highlightbackground=BORDER, highlightthickness=1)
+    header = tk.Frame(frame, bg=BG_PANEL)
+    header.pack(fill=tk.X, padx=8, pady=(6, 2))
+    lbl = tk.Label(header, text=f"{icon} {title}".strip(), font=("Segoe UI", 10, "bold"), fg=FG, bg=BG_PANEL)
+    lbl.pack(anchor=tk.W)
+    content = tk.Frame(frame, bg=BG_PANEL, padx=6, pady=4)
+    content.pack(fill=tk.BOTH, expand=True)
+    return frame, content
 
 
 def _make_text(parent, height: int, readonly: bool = False, **kw):
     """Create a Text widget with scrollbar."""
-    frame = tk.Frame(parent, bg=BG)
+    frame = tk.Frame(parent, bg=BG_PANEL)
     t = tk.Text(
         frame,
         font=("Segoe UI", 11),
         fg=FG,
-        bg="#252525",
+        bg=BG_INPUT,
         wrap=tk.WORD,
         insertbackground=FG,
-        selectbackground="#404040",
+        selectbackground=ACCENT,
         selectforeground=FG,
         relief=tk.FLAT,
-        padx=6,
-        pady=4,
+        padx=10,
+        pady=8,
         height=height,
         **kw,
     )
-    sb = tk.Scrollbar(frame, command=t.yview, bg=BG, troughcolor=BG)
+    sb = tk.Scrollbar(frame, command=t.yview, bg=BG_PANEL, troughcolor=BORDER, activebackground=FG_DIM)
     t.configure(yscrollcommand=sb.set)
     t.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    sb.pack(side=tk.RIGHT, fill=tk.Y)
+    sb.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 2))
     if readonly:
         t.config(state=tk.DISABLED)
     return t, frame
@@ -58,7 +78,7 @@ class CaptionWindow:
         interview_mode=True,
     ):
         self.root = tk.Tk()
-        self.root.title("Interview Answering Assistant")
+        self.root.title("NPC Dialogue Engine")
         self.root.configure(bg=bg)
         self.root.attributes("-topmost", True)
         self.root.overrideredirect(not interview_mode)  # Normal window in interview mode
@@ -75,6 +95,7 @@ class CaptionWindow:
         self._diarize_change_cb = None
         self._generate_cb = None
         self._clear_cb = None
+        self._transcriber_apply_cb = None
         self._system_available = system_available
         self._capturing = True
         self._diarize_available = diarize_available
@@ -86,42 +107,76 @@ class CaptionWindow:
             self._make_draggable()
 
     def _setup_ui(self):
-        self.frame = tk.Frame(self.root, bg=self.bg, padx=10, pady=6)
+        self.root.configure(bg=BG)
+        self.frame = tk.Frame(self.root, bg=BG, padx=12, pady=8)
         self.frame.pack(fill=tk.BOTH, expand=True)
 
+        # --- Title bar ---
+        title_frame = tk.Frame(self.frame, bg=BG)
+        title_frame.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(title_frame, text="NPC Dialogue Engine", font=("Segoe UI", 14, "bold"), fg=FG, bg=BG).pack(side=tk.LEFT)
+        self._status_dot = tk.Canvas(title_frame, width=10, height=10, bg=BG, highlightthickness=0)
+        self._status_dot.pack(side=tk.RIGHT, padx=(8, 0))
+        self._status_dot.create_oval(1, 1, 9, 9, fill=LIVE, outline="")
+        self._status_label = tk.Label(title_frame, text="LIVE", font=("Segoe UI", 9, "bold"), fg=LIVE, bg=BG)
+        self._status_label.pack(side=tk.RIGHT)
+
         # --- Toolbar ---
-        toolbar = tk.Frame(self.frame, bg=self.bg)
-        toolbar.pack(fill=tk.X, pady=(0, 6))
-        tk.Label(toolbar, text="Capture:", font=("Segoe UI", 10), fg="#aaa", bg=self.bg).pack(side=tk.LEFT, padx=(0, 6))
+        toolbar = tk.Frame(self.frame, bg=BG_PANEL, highlightbackground=BORDER, highlightthickness=1)
+        toolbar.pack(fill=tk.X, pady=(0, 8))
+        inner = tk.Frame(toolbar, bg=BG_PANEL, padx=10, pady=6)
+        inner.pack(fill=tk.X)
+        tk.Label(inner, text="Capture:", font=("Segoe UI", 9), fg=FG_DIM, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 6))
         default_mode = "system" if self._system_available else "mic"
         self._mode_var = tk.StringVar(value=default_mode)
         modes = ["system", "both"] if self._system_available else []
         modes.append("mic")
-        self._mode_menu = tk.OptionMenu(toolbar, self._mode_var, *modes, command=self._on_mode_change)
-        self._mode_menu.config(font=("Segoe UI", 10), bg="#2a2a2a", fg=self.fg, highlightthickness=0, anchor="w")
+        self._mode_menu = tk.OptionMenu(inner, self._mode_var, *modes, command=self._on_mode_change)
+        self._mode_menu.config(font=("Segoe UI", 10), bg=BG_INPUT, fg=FG, highlightthickness=0, anchor="w")
         self._mode_menu.pack(side=tk.LEFT)
-        tk.Button(toolbar, text="Clear", font=("Segoe UI", 9), bg="#333", fg=self.fg, relief=tk.FLAT, padx=8, command=self.clear_history).pack(side=tk.LEFT, padx=(12, 0))
+        tk.Label(inner, text="Device:", font=("Segoe UI", 9), fg=FG_DIM, bg=BG_PANEL).pack(side=tk.LEFT, padx=(12, 4))
+        self._device_var = tk.StringVar(value="auto")
+        for opt in ["auto", "gpu", "cpu"]:
+            tk.Radiobutton(inner, text=opt.upper(), variable=self._device_var, value=opt, font=("Segoe UI", 8),
+                           fg=FG_DIM, bg=BG_PANEL, selectcolor=BG_INPUT, activebackground=BG_PANEL,
+                           activeforeground=FG, command=self._on_transcriber_settings_changed).pack(side=tk.LEFT, padx=2)
+        tk.Label(inner, text="Model:", font=("Segoe UI", 9), fg=FG_DIM, bg=BG_PANEL).pack(side=tk.LEFT, padx=(12, 4))
+        self._model_var = tk.StringVar(value="small.en")
+        models = ["base.en", "small.en", "medium.en", "turbo"]
+        self._model_menu = tk.OptionMenu(inner, self._model_var, *models)
+        self._model_menu.config(font=("Segoe UI", 9), bg=BG_INPUT, fg=FG, highlightthickness=0, anchor="w")
+        self._model_menu.pack(side=tk.LEFT)
+        tk.Button(inner, text="Apply", font=("Segoe UI", 9), bg=ACCENT, fg=FG, relief=tk.FLAT, padx=8, pady=2,
+                  command=self._apply_transcriber_settings, activebackground=ACCENT_HOVER, activeforeground=FG).pack(side=tk.LEFT, padx=(8, 0))
+        tk.Button(inner, text="Clear", font=("Segoe UI", 9), bg=BG_INPUT, fg=FG, relief=tk.FLAT, padx=10, pady=2, command=self.clear_history,
+                  activebackground=BORDER, activeforeground=FG).pack(side=tk.LEFT, padx=(12, 0))
         if self._diarize_available:
             self._diarize_var = tk.BooleanVar(value=self._diarize_initial)
-            tk.Checkbutton(toolbar, text="Diarize", variable=self._diarize_var, font=("Segoe UI", 9), fg="#aaa", bg=self.bg, selectcolor="#333", activebackground=self.bg, activeforeground=self.fg, command=self._on_diarize_change).pack(side=tk.LEFT, padx=(12, 0))
-        self._stop_btn = tk.Button(toolbar, text="Stop", font=("Segoe UI", 9), bg="#444", fg=self.fg, relief=tk.FLAT, padx=10, command=self._on_stop_click)
+            tk.Checkbutton(inner, text="Diarize", variable=self._diarize_var, font=("Segoe UI", 9), fg=FG_DIM, bg=BG_PANEL,
+                          selectcolor=BG_INPUT, activebackground=BG_PANEL, activeforeground=FG, command=self._on_diarize_change).pack(side=tk.LEFT, padx=(12, 0))
+        self._stop_btn = tk.Button(inner, text="Stop", font=("Segoe UI", 9), bg=BORDER, fg=FG, relief=tk.FLAT, padx=12, pady=2,
+                                   command=self._on_stop_click, activebackground=FG_DIM, activeforeground=FG)
         self._stop_btn.pack(side=tk.LEFT, padx=(12, 0))
-        tk.Button(toolbar, text="Close", font=("Segoe UI", 9), bg="#c44", fg=self.fg, relief=tk.FLAT, padx=10, command=self._on_close).pack(side=tk.RIGHT)
+        tk.Button(inner, text="Close", font=("Segoe UI", 9), bg="#991b1b", fg=FG, relief=tk.FLAT, padx=12, pady=2,
+                  command=self._on_close, activebackground="#b91c1c", activeforeground=FG).pack(side=tk.RIGHT)
 
         # --- Main content: PanedWindow ---
-        paned = tk.PanedWindow(self.frame, orient=tk.VERTICAL, bg=self.bg, sashwidth=6)
+        paned = tk.PanedWindow(self.frame, orient=tk.VERTICAL, bg=BG, sashwidth=8)
 
-        # --- Panel 1: Live Caption / Dialogue History ---
-        dialog_frame = tk.Frame(paned, bg=self.bg)
-        _make_label(dialog_frame, "Live Caption / Dialogue History").pack(anchor=tk.W)
+        # --- Panel 1: Live Caption ---
+        dialog_panel, dialog_content = _make_panel(paned, "Live Caption", "●")
+        legend = tk.Frame(dialog_content, bg=BG_PANEL)
+        legend.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(legend, text="Confirmed", font=("Segoe UI", 8), fg=SUCCESS, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 12))
+        tk.Label(legend, text="Live", font=("Segoe UI", 8), fg=FG_DIM, bg=BG_PANEL).pack(side=tk.LEFT)
         f = tkfont.Font(family="Segoe UI", size=self.font_size, weight="normal")
-        text_frame = tk.Frame(dialog_frame, bg=self.bg)
+        text_frame = tk.Frame(dialog_content, bg=BG_PANEL)
         self.text = tk.Text(
-            text_frame, font=f, fg=self.fg, bg=self.bg,
-            wrap=tk.WORD, insertbackground=self.fg, selectbackground="#404040", selectforeground=self.fg,
-            relief=tk.FLAT, padx=4, pady=4, height=10,
+            text_frame, font=f, fg=FG, bg=BG_INPUT,
+            wrap=tk.WORD, insertbackground=FG, selectbackground=ACCENT, selectforeground=FG,
+            relief=tk.FLAT, padx=12, pady=10, height=10,
         )
-        sb1 = tk.Scrollbar(text_frame, command=self.text.yview, bg=self.bg, troughcolor=self.bg)
+        sb1 = tk.Scrollbar(text_frame, command=self.text.yview, bg=BG_PANEL, troughcolor=BORDER)
         self.text.configure(yscrollcommand=sb1.set)
         self.text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb1.pack(side=tk.RIGHT, fill=tk.Y)
@@ -129,44 +184,46 @@ class CaptionWindow:
         self._final_end = self.text.index(tk.END)
         self._current_real_end = self._final_end
         text_frame.pack(fill=tk.BOTH, expand=True)
-        dialog_frame.pack(fill=tk.BOTH, expand=True)
-        paned.add(dialog_frame, minsize=120)
+        dialog_content.pack(fill=tk.BOTH, expand=True)
+        paned.add(dialog_panel, minsize=140)
 
         # --- Panel 2: User Context ---
         if self._interview_mode:
-            ctx_frame = tk.Frame(paned, bg=self.bg)
-            _make_label(ctx_frame, "User Context (resume, job description, talking points)").pack(anchor=tk.W)
-            self.context_text, ctx_inner = _make_text(ctx_frame, height=6)
+            ctx_panel, ctx_content = _make_panel(paned, "User Context (resume, job description, talking points)", "")
+            self.context_text, ctx_inner = _make_text(ctx_content, height=5)
             ctx_inner.pack(fill=tk.BOTH, expand=True)
-            paned.add(ctx_frame, minsize=80)
+            paned.add(ctx_panel, minsize=80)
 
-            # --- Generate Answer button ---
-            btn_frame = tk.Frame(paned, bg=self.bg)
+            btn_frame = tk.Frame(paned, bg=BG, pady=4)
             self._gen_btn = tk.Button(
                 btn_frame, text="Generate Answer",
-                font=("Segoe UI", 11), bg=ACCENT, fg=FG,
-                relief=tk.FLAT, padx=20, pady=8,
+                font=("Segoe UI", 12, "bold"), bg=ACCENT, fg=FG,
+                relief=tk.FLAT, padx=28, pady=10,
                 command=self._on_generate,
+                activebackground=ACCENT_HOVER, activeforeground=FG,
             )
-            self._gen_btn.pack(pady=4)
-            paned.add(btn_frame, minsize=50)
+            self._gen_btn.pack()
+            paned.add(btn_frame, minsize=56)
 
-            # --- Panel 3: Generated Answer ---
-            ans_frame = tk.Frame(paned, bg=self.bg)
-            _make_label(ans_frame, "Generated Answer").pack(anchor=tk.W)
-            self.answer_text, ans_inner = _make_text(ans_frame, height=8, readonly=False)
+            ans_panel, ans_content = _make_panel(paned, "Generated Answer", "★")
+            self.answer_text, ans_inner = _make_text(ans_content, height=8, readonly=False)
             ans_inner.pack(fill=tk.BOTH, expand=True)
-            paned.add(ans_frame, minsize=100)
+            paned.add(ans_panel, minsize=120)
 
         paned.pack(fill=tk.BOTH, expand=True)
+
+        # --- Status bar ---
+        status_bar = tk.Frame(self.frame, bg=BG_PANEL, highlightbackground=BORDER, highlightthickness=1)
+        status_bar.pack(fill=tk.X, pady=(8, 0))
+        self._status_text = tk.Label(status_bar, text="Ready • Ctrl+C to copy • Esc to close", font=("Segoe UI", 8), fg=FG_DIM, bg=BG_PANEL)
+        self._status_text.pack(side=tk.LEFT, padx=10, pady=4)
 
         def block_caption_edit(e):
             if (e.state & 0x4) and e.keysym.lower() == "c":
                 return
             return "break"
-        # Temp/preview = dim gray; real/final = highlighted (subtle background)
-        self.text.tag_configure("preview", foreground="#888888")
-        self.text.tag_configure("final", background="#2a3540", foreground=self.fg)  # subtle highlight for confirmed text
+        self.text.tag_configure("preview", foreground=FG_DIM)
+        self.text.tag_configure("final", background="#1e3a2f", foreground=FG)
         self.text.bind("<Key>", block_caption_edit)
         self.root.bind("<Escape>", lambda e: self._on_close())
         self.root.bind("<Button-3>", lambda e: self._show_menu(e))
@@ -179,6 +236,25 @@ class CaptionWindow:
             if sel:
                 self.root.clipboard_clear()
                 self.root.clipboard_append(sel)
+                self._set_status("Copied to clipboard")
+        except tk.TclError:
+            pass
+
+    def _set_status(self, msg: str):
+        if hasattr(self, "_status_text"):
+            self._status_text.config(text=msg)
+
+    def set_status(self, msg: str):
+        """Public API for main to update status bar."""
+        self._set_status(msg)
+
+    def _copy_all(self):
+        try:
+            content = self.text.get(1.0, tk.END).strip()
+            if content and not content.startswith("Listening") and not content.startswith("Stopped"):
+                self.root.clipboard_clear()
+                self.root.clipboard_append(content)
+                self._set_status("Copied full transcript")
         except tk.TclError:
             pass
 
@@ -201,9 +277,35 @@ class CaptionWindow:
         if self._diarize_change_cb:
             self._diarize_change_cb(self._diarize_var.get())
 
+    def _on_transcriber_settings_changed(self):
+        pass  # No-op; Apply button triggers the callback
+
+    def _apply_transcriber_settings(self):
+        if self._transcriber_apply_cb:
+            self._transcriber_apply_cb()
+
+    def get_device(self) -> str:
+        return (self._device_var.get() or "auto").lower()
+
+    def get_model(self) -> str:
+        return self._model_var.get() or "small.en"
+
+    def on_transcriber_apply(self, callback):
+        self._transcriber_apply_cb = callback
+
     def set_capturing(self, capturing: bool):
         self._capturing = capturing
         self._stop_btn.config(text="Start" if not capturing else "Stop")
+        self._update_status_indicator(capturing)
+
+    def _update_status_indicator(self, capturing: bool):
+        if not hasattr(self, "_status_dot"):
+            return
+        self._status_dot.delete("all")
+        color = LIVE if capturing else FG_DIM
+        self._status_dot.create_oval(1, 1, 9, 9, fill=color, outline="")
+        if hasattr(self, "_status_label"):
+            self._status_label.config(text="LIVE" if capturing else "STOPPED", fg=color)
 
     def is_capturing(self) -> bool:
         return self._capturing
@@ -220,6 +322,11 @@ class CaptionWindow:
         self._final_end = self.text.index(tk.END)
         self._current_real_end = self._final_end
         self._last_speaker = None
+        if self._interview_mode and hasattr(self, "answer_text"):
+            self.answer_text.config(state=tk.NORMAL)
+            self.answer_text.delete(1.0, tk.END)
+            self.answer_text.config(state=tk.NORMAL)
+        self._set_status("Chat cleared • Ready")
 
     def get_mode(self):
         return self._mode_var.get()
@@ -247,7 +354,8 @@ class CaptionWindow:
 
     def _show_menu(self, event):
         menu = tk.Menu(self.root, tearoff=0)
-        menu.add_command(label="Copy (Ctrl+C)", command=lambda: self._copy_from(self.text))
+        menu.add_command(label="Copy selection (Ctrl+C)", command=lambda: self._copy_from(self.text))
+        menu.add_command(label="Copy all", command=lambda: self._copy_all())
         menu.add_command(label="Clear history", command=self.clear_history)
         menu.add_separator()
         menu.add_command(label="Close (Esc)", command=self._on_close)
@@ -282,6 +390,8 @@ class CaptionWindow:
             self.answer_text.delete(1.0, tk.END)
             self.answer_text.insert(tk.END, text or "")
             self.answer_text.config(state=tk.NORMAL)
+            if hasattr(self, "_status_text") and text:
+                self._set_status("Answer generated")
 
     def set_generate_loading(self, loading: bool):
         """Show loading state on Generate button."""

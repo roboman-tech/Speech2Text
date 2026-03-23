@@ -1,4 +1,4 @@
-# Live Caption / Interview Assistant
+# NPC Dialogue Engine
 
 Real-time live captions for **all sounds** — system audio (videos, apps) and microphone. Optional **Generate Answer** panel uses DeepSeek when `DEEPSEEK_API_KEY` is set.
 

@@ -1,9 +1,9 @@
 """
-Interview Answering Assistant - Live captions + AI-generated answers.
+NPC Dialogue Engine - Live captions + AI-generated answers.
 Uses system audio + microphone for real-time transcription. Paste context (resume, job
 description) and click Generate Answer to get DeepSeek-assisted responses.
 Env: SPEAKER_NAMES, DEEPSEEK_API_KEY, HF_TOKEN (for diarization).
-      QUIET=1 — force off terminal diagnostics even if -v is passed.
+     QUIET=1 — force off terminal diagnostics even if -v is passed.
 """
 
 import argparse
@@ -226,15 +226,19 @@ def main():
             return
 
     use_diarize = ui.get_diarize()
-    transcriber = RealtimeTranscriber(
-        audio_queue,
-        text_callback=lambda t, **kw: on_transcription(t, **kw),
-        #whisper_model_size="small.en",  # English-only; use "turbo" for multilingual
-        whisper_model_size="turbo",  # English-only; use "turbo" for multilingual
-        use_noise_reduce=True,
-        verbose=args.verbose,
-        use_diarization=use_diarize,
-    )
+
+    def _create_transcriber():
+        return RealtimeTranscriber(
+            audio_queue,
+            text_callback=lambda t, **kw: on_transcription(t, **kw),
+            whisper_model_size=ui.get_model(),
+            device=ui.get_device(),
+            use_noise_reduce=True,
+            verbose=args.verbose,
+            use_diarization=ui.get_diarize(),
+        )
+
+    transcriber = _create_transcriber()
     if use_diarize and speaker_names:
         from transcriber import _get_diarization_pipeline
         if _get_diarization_pipeline() is None:
@@ -243,6 +247,34 @@ def main():
             vprint("Diarization: ready (names from SPEAKER_NAMES)")
 
     capturer = None
+
+    def on_transcriber_apply():
+        nonlocal transcriber, capturer
+        was_capturing = capturer is not None and ui.is_capturing()
+        if capturer:
+            capturer.stop()
+            capturer = None
+        while True:
+            try:
+                audio_queue.get_nowait()
+            except queue.Empty:
+                break
+        transcriber.stop()
+        vprint("Reloading Whisper model...")
+        transcriber = _create_transcriber()
+        transcriber.start()
+        if was_capturing:
+            mode = ui.get_mode()
+            sys_flag, mic_flag = mode_to_flags(mode)
+            if sys_flag or mic_flag:
+                capturer = MixingAudioCapture(
+                    audio_queue,
+                    capture_system=sys_flag,
+                    capture_mic=mic_flag,
+                )
+                capturer.start()
+        vprint(f"Model: {ui.get_model()} | Device: {ui.get_device()}")
+        ui.set_status(f"Model: {ui.get_model()} | Device: {ui.get_device()}")
 
     def on_mode_change(mode: str):
         nonlocal capturer
@@ -326,19 +358,21 @@ def main():
                 return t
         return ""
 
-    def _build_prompt(context: str, history: list[dict], question: str) -> tuple[str, str]:
-        """Build (system_prompt, user_prompt) for DeepSeek."""
+    def _build_prompt(pre_given_context: str, dialogue_since_clear: list[dict], question: str) -> tuple[str, str]:
+        """Build (system_prompt, user_prompt) for DeepSeek.
+        Uses pre-given context (resume, etc.) and dialogue since last Clear."""
         sys = (
-            "You are an interview answering assistant. Use the provided context (resume, job description, etc.) "
-            "and dialogue history to generate clear, relevant answers. Be concise but complete."
+            "You are an interview answering assistant. Use the pre-given context (resume, job description, etc.) "
+            "and the dialogue history (transcriptions since last clear) to generate clear, relevant answers. Be concise but complete."
         )
         lines = []
-        for h in history:
+        for h in dialogue_since_clear:
             s = h.get("speaker") or "Speaker"
             t = h.get("text") or ""
             lines.append(f"{s}: {t}")
-        dialogue = "\n".join(lines) if lines else "(no dialogue yet)"
-        user = f"Context:\n{context or '(no context provided)'}\n\nDialogue:\n{dialogue}\n\n"
+        dialogue = "\n".join(lines) if lines else "(no dialogue since last clear)"
+        user = f"Pre-given context (resume, job description, talking points):\n{pre_given_context or '(none)'}\n\n"
+        user += f"Dialogue since last clear:\n{dialogue}\n\n"
         if question:
             user += f"Latest question/request:\n{question}\n\nGenerate a helpful answer:"
         else:
@@ -346,9 +380,9 @@ def main():
         return sys, user
 
     def generate_answer():
-        context = ui.get_user_context()
+        pre_given = ui.get_user_context()
         question = _detect_latest_question(dialogue_history)
-        sys_prompt, user_prompt = _build_prompt(context, dialogue_history, question)
+        sys_prompt, user_prompt = _build_prompt(pre_given, dialogue_history, question)
         ui.set_generate_loading(True)
         ui.set_generated_answer("")
 
@@ -368,6 +402,7 @@ def main():
         threading.Thread(target=_run, daemon=True).start()
 
     ui.on_close(on_closing)
+    ui.on_transcriber_apply(on_transcriber_apply)
     ui.on_mode_change(on_mode_change)
     ui.on_stop(on_stop_click)
     ui.on_diarize_change(lambda enabled: transcriber.set_diarization(enabled))

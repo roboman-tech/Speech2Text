@@ -199,6 +199,7 @@ class RealtimeTranscriber:
         audio_queue: queue.Queue,
         text_callback,
         whisper_model_size: str = "small.en",
+        device: str = "auto",
         use_noise_reduce: bool = True,
         verbose: bool = False,
         use_diarization: bool = False,
@@ -206,6 +207,7 @@ class RealtimeTranscriber:
         self.audio_queue = audio_queue
         self.text_callback = text_callback
         self.whisper_model_size = whisper_model_size
+        self._device_pref = (device or "auto").lower()
         self.use_noise_reduce = use_noise_reduce
         self.verbose = verbose
         self.use_diarization = use_diarization
@@ -228,7 +230,17 @@ class RealtimeTranscriber:
     def _load_model(self):
         import torch
         import whisper
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        cuda_avail = torch.cuda.is_available()
+        if self._device_pref == "cpu":
+            self._device = "cpu"
+        elif self._device_pref in ("cuda", "gpu") and cuda_avail:
+            self._device = "cuda"
+        elif self._device_pref in ("cuda", "gpu") and not cuda_avail:
+            if self.verbose:
+                print("[Whisper] GPU requested but not available, using CPU")
+            self._device = "cpu"
+        else:
+            self._device = "cuda" if cuda_avail else "cpu"
         self._model = whisper.load_model(self.whisper_model_size, device=self._device)
 
     def _vad_buffer_loop(self):
