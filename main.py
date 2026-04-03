@@ -13,7 +13,9 @@ import warnings
 import queue
 import sys
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
+from tkinter import filedialog
 
 def _load_dotenv():
     """Load .env (HF_TOKEN, SPEAKER_NAMES, etc.) without extra dependencies."""
@@ -36,7 +38,8 @@ _load_dotenv()
 from audio_capture import MixingAudioCapture, get_system_audio_status
 from transcriber import RealtimeTranscriber
 from ui import CaptionWindow
-from deepseek_api import generate as deepseek_generate
+from chat_history_save import save_chat_history
+from deepseek_api import get_api_key, iter_generate_stream
 
 
 def _load_speaker_names():
@@ -341,6 +344,26 @@ def main():
         _current_speaker[0] = None
         transcriber.reset()
 
+    def on_save_chat_export():
+        initial = f"chat_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.txt"
+        path = filedialog.asksaveasfilename(
+            parent=ui.root,
+            title="Save chat history (plain text)",
+            defaultextension=".txt",
+            filetypes=[
+                ("Text", "*.txt"),
+                ("All files", "*.*"),
+            ],
+            initialfile=initial,
+        )
+        if not path:
+            return
+        try:
+            out = save_chat_history(dialogue_history, path)
+            ui.set_status(f"Saved: {out}")
+        except OSError as e:
+            ui.set_status(f"Save failed: {e}")
+
     def _detect_latest_question(history: list[dict]) -> str:
         """Scan dialogue from end to find the latest question or request."""
         q_markers = ("?", "tell me", "what", "how", "why", "can you", "could you", "would you", "describe", "explain")
@@ -362,8 +385,8 @@ def main():
         """Build (system_prompt, user_prompt) for DeepSeek.
         Uses pre-given context (resume, etc.) and dialogue since last Clear."""
         sys = (
-            "You are an interview answering assistant. Use the pre-given context (resume, job description, etc.) "
-            "and the dialogue history (transcriptions since last clear) to generate clear, relevant, conversational answers. Be concise but complete."
+            "Interview assistant: use pre-given context + dialogue since last clear. "
+            "Answer clearly; be concise (short paragraphs, no filler)."
         )
         lines = []
         for h in dialogue_since_clear:
@@ -387,17 +410,33 @@ def main():
         ui.set_generated_answer("")
 
         def _run():
-            result = ""
+            accumulated = []
+            err_final = None
             try:
-                result = deepseek_generate(user_prompt, system_prompt=sys_prompt, timeout=60)
+                if not get_api_key():
+                    raise RuntimeError("Missing DEEPSEEK_API_KEY (or DEEPSEEK_KEY)")
+                for piece in iter_generate_stream(
+                    user_prompt, system_prompt=sys_prompt, timeout=60
+                ):
+                    accumulated.append(piece)
+                    snap = "".join(accumulated)
+                    ui.root.after(0, lambda st=snap: ui.set_generated_answer(st))
             except Exception as e:
-                result = f"Error: {e}"
-            if not result:
-                result = "No response from DeepSeek. Check DEEPSEEK_API_KEY and network."
-            def _update():
-                ui.set_generated_answer(result)
+                err_final = str(e)
+                snap = "".join(accumulated)
+                msg = (snap + "\n\n" + err_final) if snap else err_final
+                ui.root.after(0, lambda st=msg: ui.set_generated_answer(st))
+
+            def _done():
                 ui.set_generate_loading(False)
-            ui.root.after(0, _update)
+                if err_final is not None:
+                    return
+                if not "".join(accumulated).strip():
+                    ui.set_generated_answer(
+                        "No response from DeepSeek. Check DEEPSEEK_API_KEY and network."
+                    )
+
+            ui.root.after(0, _done)
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -407,6 +446,7 @@ def main():
     ui.on_stop(on_stop_click)
     ui.on_diarize_change(lambda enabled: transcriber.set_diarization(enabled))
     ui.on_clear(on_clear_history)
+    ui.on_save_chat(on_save_chat_export)
     ui.on_generate(generate_answer)
 
     initial_mode = ui.get_mode()

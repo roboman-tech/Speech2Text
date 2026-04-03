@@ -67,7 +67,7 @@ def _make_text(parent, height: int, readonly: bool = False, **kw):
 class CaptionWindow:
     def __init__(
         self,
-        width=920,
+        width=1080,
         height=720,
         font_size=16,
         bg=BG,
@@ -94,6 +94,7 @@ class CaptionWindow:
         self._stop_cb = None
         self._diarize_change_cb = None
         self._generate_cb = None
+        self._save_chat_cb = None
         self._clear_cb = None
         self._transcriber_apply_cb = None
         self._system_available = system_available
@@ -150,6 +151,12 @@ class CaptionWindow:
                   command=self._apply_transcriber_settings, activebackground=ACCENT_HOVER, activeforeground=FG).pack(side=tk.LEFT, padx=(8, 0))
         tk.Button(inner, text="Clear", font=("Segoe UI", 9), bg=BG_INPUT, fg=FG, relief=tk.FLAT, padx=10, pady=2, command=self.clear_history,
                   activebackground=BORDER, activeforeground=FG).pack(side=tk.LEFT, padx=(12, 0))
+        if self._interview_mode:
+            tk.Button(
+                inner, text="Save chat", font=("Segoe UI", 9), bg=BG_INPUT, fg=FG,
+                relief=tk.FLAT, padx=10, pady=2, command=self._on_save_chat,
+                activebackground=BORDER, activeforeground=FG,
+            ).pack(side=tk.LEFT, padx=(8, 0))
         if self._diarize_available:
             self._diarize_var = tk.BooleanVar(value=self._diarize_initial)
             tk.Checkbutton(inner, text="Diarize", variable=self._diarize_var, font=("Segoe UI", 9), fg=FG_DIM, bg=BG_PANEL,
@@ -160,11 +167,17 @@ class CaptionWindow:
         tk.Button(inner, text="Close", font=("Segoe UI", 9), bg="#991b1b", fg=FG, relief=tk.FLAT, padx=12, pady=2,
                   command=self._on_close, activebackground="#b91c1c", activeforeground=FG).pack(side=tk.RIGHT)
 
-        # --- Main content: PanedWindow ---
-        paned = tk.PanedWindow(self.frame, orient=tk.VERTICAL, bg=BG, sashwidth=8)
+        # --- Main content: interview = captions+context (left) | generate+answer (right) ---
+        if self._interview_mode:
+            outer = tk.PanedWindow(self.frame, orient=tk.HORIZONTAL, bg=BG, sashwidth=8)
+            left_paned = tk.PanedWindow(outer, orient=tk.VERTICAL, bg=BG, sashwidth=8)
+            dialog_parent = left_paned
+        else:
+            paned = tk.PanedWindow(self.frame, orient=tk.VERTICAL, bg=BG, sashwidth=8)
+            dialog_parent = paned
 
         # --- Panel 1: Live Caption ---
-        dialog_panel, dialog_content = _make_panel(paned, "Live Caption", "●")
+        dialog_panel, dialog_content = _make_panel(dialog_parent, "Live Caption", "●")
         legend = tk.Frame(dialog_content, bg=BG_PANEL)
         legend.pack(fill=tk.X, pady=(0, 4))
         tk.Label(legend, text="Confirmed", font=("Segoe UI", 8), fg=SUCCESS, bg=BG_PANEL).pack(side=tk.LEFT, padx=(0, 12))
@@ -185,37 +198,60 @@ class CaptionWindow:
         self._current_real_end = self._final_end
         text_frame.pack(fill=tk.BOTH, expand=True)
         dialog_content.pack(fill=tk.BOTH, expand=True)
-        paned.add(dialog_panel, minsize=140)
+        dialog_parent.add(dialog_panel, minsize=140)
 
-        # --- Panel 2: User Context ---
         if self._interview_mode:
-            ctx_panel, ctx_content = _make_panel(paned, "User Context (resume, job description, talking points)", "")
+            # --- Left column: User Context ---
+            ctx_panel, ctx_content = _make_panel(left_paned, "User Context (resume, job description, talking points)", "")
             self.context_text, ctx_inner = _make_text(ctx_content, height=5)
             ctx_inner.pack(fill=tk.BOTH, expand=True)
-            paned.add(ctx_panel, minsize=80)
+            left_paned.add(ctx_panel, minsize=80)
 
-            btn_frame = tk.Frame(paned, bg=BG, pady=4)
+            outer.add(left_paned, minsize=400)
+
+            # --- Right column: Generate + answer ---
+            right_col = tk.Frame(outer, bg=BG, padx=2)
+            btn_frame = tk.Frame(right_col, bg=BG)
             self._gen_btn = tk.Button(
                 btn_frame, text="Generate Answer",
                 font=("Segoe UI", 12, "bold"), bg=ACCENT, fg=FG,
-                relief=tk.FLAT, padx=28, pady=10,
+                relief=tk.FLAT, padx=20, pady=10,
                 command=self._on_generate,
                 activebackground=ACCENT_HOVER, activeforeground=FG,
             )
-            self._gen_btn.pack()
-            paned.add(btn_frame, minsize=56)
+            self._gen_btn.pack(fill=tk.X)
+            btn_frame.pack(fill=tk.X, pady=(0, 6))
 
-            ans_panel, ans_content = _make_panel(paned, "Generated Answer", "★")
-            self.answer_text, ans_inner = _make_text(ans_content, height=8, readonly=False)
+            tk.Label(
+                right_col,
+                text="Click answer text to copy to clipboard (e.g. paste in Notepad)",
+                font=("Segoe UI", 8),
+                fg=FG_DIM,
+                bg=BG,
+                wraplength=300,
+                justify=tk.LEFT,
+            ).pack(anchor=tk.W, pady=(0, 4))
+
+            ans_panel, ans_content = _make_panel(right_col, "Generated Answer", "★")
+            self.answer_text, ans_inner = _make_text(ans_content, height=12, readonly=False)
             ans_inner.pack(fill=tk.BOTH, expand=True)
-            paned.add(ans_panel, minsize=120)
+            ans_panel.pack(fill=tk.BOTH, expand=True)
+            self.answer_text.bind("<Button-1>", self._on_answer_click, add="+")
 
-        paned.pack(fill=tk.BOTH, expand=True)
+            outer.add(right_col, minsize=300)
+            outer.pack(fill=tk.BOTH, expand=True)
+        else:
+            paned.pack(fill=tk.BOTH, expand=True)
 
         # --- Status bar ---
         status_bar = tk.Frame(self.frame, bg=BG_PANEL, highlightbackground=BORDER, highlightthickness=1)
         status_bar.pack(fill=tk.X, pady=(8, 0))
-        self._status_text = tk.Label(status_bar, text="Ready • Ctrl+C to copy • Esc to close", font=("Segoe UI", 8), fg=FG_DIM, bg=BG_PANEL)
+        _status0 = (
+            "Ready • click Generated Answer to copy • Esc to close"
+            if self._interview_mode
+            else "Ready • Ctrl+C to copy • Esc to close"
+        )
+        self._status_text = tk.Label(status_bar, text=_status0, font=("Segoe UI", 8), fg=FG_DIM, bg=BG_PANEL)
         self._status_text.pack(side=tk.LEFT, padx=10, pady=4)
 
         def block_caption_edit(e):
@@ -258,12 +294,36 @@ class CaptionWindow:
         except tk.TclError:
             pass
 
+    def _on_answer_click(self, event):
+        """Copy full answer on click so it can be pasted elsewhere (Notepad, etc.)."""
+        if not self._interview_mode or not hasattr(self, "answer_text"):
+            return
+        w = event.widget
+        if w is not self.answer_text:
+            return
+        try:
+            t = self.answer_text.get(1.0, tk.END).strip()
+            if t:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(t)
+                self._set_status("Copied answer — paste anywhere (e.g. Notepad)")
+        except tk.TclError:
+            pass
+
     def _on_generate(self):
         if self._generate_cb:
             self._generate_cb()
 
     def on_generate(self, callback):
         self._generate_cb = callback
+
+    def _on_save_chat(self):
+        if self._save_chat_cb:
+            self._save_chat_cb()
+
+    def on_save_chat(self, callback):
+        """Optional: save dialogue history (wired from main)."""
+        self._save_chat_cb = callback
 
     def _on_mode_change(self, value):
         if self._mode_change_cb:
@@ -390,13 +450,21 @@ class CaptionWindow:
             self.answer_text.delete(1.0, tk.END)
             self.answer_text.insert(tk.END, text or "")
             self.answer_text.config(state=tk.NORMAL)
-            if hasattr(self, "_status_text") and text:
+            if (
+                hasattr(self, "_status_text")
+                and text
+                and not getattr(self, "_answer_streaming", False)
+            ):
                 self._set_status("Answer generated")
 
     def set_generate_loading(self, loading: bool):
         """Show loading state on Generate button."""
+        self._answer_streaming = loading
         if hasattr(self, "_gen_btn"):
-            self._gen_btn.config(state=tk.DISABLED if loading else tk.NORMAL, text="Generating..." if loading else "Generate Answer")
+            self._gen_btn.config(
+                state=tk.DISABLED if loading else tk.NORMAL,
+                text="Generating..." if loading else "Generate Answer",
+            )
 
     def set_text(self, text: str):
         self._clear_preview()
